@@ -1,8 +1,9 @@
-// used-cars/api/src/jobs/alertsRunner.ts
-import { PrismaClient } from '@prisma/client';
+// src/jobs/alertsRunner.ts
+import { PrismaClient, Prisma } from "@prisma/client";
 
-type Prismaish = PrismaClient & { [k: string]: any };
+const prismaSingleton = new PrismaClient();
 
+// Build a Prisma where clause from saved search filters
 function buildWhereFromFilters(filters: any) {
   const f = (filters ?? {}) as any;
   const where: any = {};
@@ -32,71 +33,56 @@ function buildWhereFromFilters(filters: any) {
 }
 
 /**
- * Process saved searches that are due by cadence.
- * - If new listings since lastCheck > 0 => create AlertEvent and set lastNotified
- * - Always update lastCheck to now for processed searches
+ * Run alerts once.
+ * Returns the number of saved searches that were processed.
  */
-export async function processDueSavedSearches(prisma: Prismaish): Promise<{ processed: number }> {
-  const now = new Date();
+export async function runAlertsOnce(prismaArg?: PrismaClient): Promise<number> {
+  const prisma = prismaArg ?? prismaSingleton;
 
-  // Find searches due by cadence
-  const due = await prisma.savedSearch.findMany({
-    where: {
-      notify: true,
-      OR: [
-        { lastCheck: null },
-        {
-          AND: [
-            { lastCheck: { not: null } },
-            // lastCheck older than cadenceMins
-            // We'll check in JS because Prisma doesn't support "age > x minutes" natively.
-          ],
-        },
-      ],
-    },
-    orderBy: { createdAt: 'asc' },
-    take: 50,
+  // Get all searches that have notifications enabled
+  const all = await prisma.savedSearch.findMany({
+    where: { notify: true },
+    orderBy: { createdAt: "asc" },
   });
 
-  // Filter here for cadence
-  const actuallyDue = due.filter((s: any) => {
+  // Filter in JS by cadence (safe and simple)
+  const now = Date.now();
+  const due = all.filter((s) => {
+    const cad = s.cadenceMins ?? 1440;
     if (!s.lastCheck) return true;
-    const mins = Number(s.cadenceMins ?? 1440);
-    const nextAt = new Date(s.lastCheck.getTime() + mins * 60 * 1000);
-    return now >= nextAt;
+    const minsSince = (now - new Date(s.lastCheck).getTime()) / 60000;
+    return minsSince >= cad;
   });
-
-  if (!actuallyDue.length) return { processed: 0 };
 
   let processed = 0;
 
-  for (const s of actuallyDue) {
+  for (const s of due) {
+    const lastCheck = s.lastCheck ?? new Date(0);
     const where = buildWhereFromFilters(s.filters);
-    if (s.lastCheck) {
-      (where as any).scraped_at = { gt: s.lastCheck };
-    }
+    (where as any).scraped_at = { gt: lastCheck };
 
-    const newCount = await prisma.listings.count({ where });
+    const count = await prisma.listings.count({ where });
 
-    await prisma.$transaction(async (tx: Prismaish) => {
-      // Always update lastCheck
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // Always move the checkpoint forward
       await tx.savedSearch.update({
         where: { id: s.id },
-        data: { lastCheck: now },
+        data: { lastCheck: new Date() },
       });
 
-      if (newCount > 0) {
+      if (count > 0) {
         await tx.alertEvent.create({
           data: {
             savedSearchId: s.id,
-            sentAt: now,
-            listingsCount: newCount,
-            details: {}, // keep simple
+            sentAt: new Date(),
+            listingsCount: count,
+            details: "", // optional text field; keep empty
           },
         });
+
         await tx.savedSearch.update({
           where: { id: s.id },
-          data: { lastNotified: now },
+          data: { lastNotified: new Date() },
         });
       }
     });
@@ -104,5 +90,5 @@ export async function processDueSavedSearches(prisma: Prismaish): Promise<{ proc
     processed += 1;
   }
 
-  return { processed };
+  return processed;
 }

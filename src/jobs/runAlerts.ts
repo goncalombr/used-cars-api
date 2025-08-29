@@ -1,23 +1,16 @@
-// used-cars/api/src/jobs/runAlerts.ts
-import "dotenv/config";
+// src/jobs/runAlerts.ts
 import { PrismaClient } from "@prisma/client";
 import { runAlertsOnce } from "./alertsRunner";
 
-async function main() {
+(async () => {
   const prisma = new PrismaClient();
   try {
-    const result = await runAlertsOnce(prisma);
-
-    console.log(`[alerts] Processed=${result.processed} CreatedEvents=${result.createdEvents} UpdatedOnly=${result.updatedOnly}`);
-    for (const line of result.logs) console.log(line);
-
-    process.exit(0);
-  } catch (e: any) {
-    console.error("[alerts] run failed:", e?.message ?? String(e));
-    process.exit(1);
+    const n = await runAlertsOnce(prisma);
+    console.log(`[alerts] Processed ${n} search(es) due by cadence…`);
+  } catch (e) {
+    console.error("[alerts] Failed:", e);
+    process.exitCode = 1;
   } finally {
     await prisma.$disconnect();
   }
-}
-
-main();
+})();

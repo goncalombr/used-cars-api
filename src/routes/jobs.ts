@@ -1,29 +1,29 @@
-// used-cars/api/src/routes/jobs.ts
-import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
-import { processDueSavedSearches } from '../jobs/alertsRunner';
+// src/routes/jobs.ts
+import { Router } from "express";
+import { runAlertsOnce } from "../jobs/alertsRunner";
 
-const prisma = new PrismaClient();
-export const jobsRouter = Router();
+const jobsRouter = Router();
 
 /**
  * POST /jobs/alerts/run
- * Requires header: x-cron-secret = <your .env CRON_SECRET>
- * Runs the alerts job once (checks due saved searches and writes AlertEvents).
+ * Header: x-cron-secret: <CRON_SECRET>
+ * Kicks the alerts job once and returns how many searches were processed.
  */
-jobsRouter.post('/alerts/run', async (req, res) => {
+jobsRouter.post("/jobs/alerts/run", async (req, res) => {
   try {
-    const hdr = String(req.headers['x-cron-secret'] || '');
-    const want = String(process.env.CRON_SECRET || '');
-    if (!want || hdr !== want) {
-      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    const provided = String(req.headers["x-cron-secret"] || "").trim();
+    const expected = String(process.env.CRON_SECRET || "").trim();
+
+    if (!expected || provided !== expected) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
     }
 
-    const result = await processDueSavedSearches(prisma);
-    // result typically: { processed: number, wrote: number, ... }
-    res.json({ ok: true, ...result });
+    const processed = await runAlertsOnce();
+    res.json({ ok: true, processed });
   } catch (e: any) {
-    console.error('[jobs] alerts/run error:', e);
+    console.error("[jobs] /jobs/alerts/run error:", e);
     res.status(500).json({ ok: false, error: e?.message ?? String(e) });
   }
 });
+
+export { jobsRouter };
