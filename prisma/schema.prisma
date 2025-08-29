@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===================== Core data =====================
+
+model listings {
+  id          BigInt   @id @default(autoincrement())
+  listing_id  String   @unique
+  link        String
+  marca       String?
+  modelo      String?
+  ano         Int?
+  km          Int?
+  preco       Int?
+  local       String?
+  transmissao String?
+  combustivel String?
+  scraped_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([ano], map: "idx_listings_ano")
+  @@index([km], map: "idx_listings_km")
+  @@index([local], map: "idx_listings_local")
+  @@index([marca], map: "idx_listings_marca")
+  @@index([modelo], map: "idx_listings_modelo")
+  @@index([preco], map: "idx_listings_preco")
+  @@index([scraped_at(sort: Desc)], map: "idx_listings_scraped_at")
+}
+
+// ===================== Auth =====================
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  name         String?
+  passwordHash String
+  role         String   @default("user") // "user" | "admin"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Invite {
+  id        Int       @id @default(autoincrement())
+  email     String
+  token     String    @unique
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  usedAt    DateTime?
+}
+
+// ============== Saved searches & alerts ==============
+// Mapped to existing table `saved_searches` with snake_case columns.
+
+model SavedSearch {
+  id        String @id @default(cuid())
+  userEmail String @map("email")
+  name      String
+  query     String @default("") // copy of querystring (e.g. "marca=BMW&price_min=5000")
+  filters   Json // full filter object
+
+  // Alert preferences
+  notify      Boolean @default(false)
+  cadenceMins Int     @default(1440) @map("cadence_mins")
+
+  // Tracking
+  lastCheck    DateTime? @map("last_check") @db.Timestamptz(6)
+  lastNotified DateTime? @map("last_notified") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // relations
+  AlertEvents AlertEvent[]
+
+  @@index([userEmail])
+  @@map("saved_searches")
+}
+
+model AlertEvent {
+  id            BigInt   @id @default(autoincrement())
+  savedSearchId String   @map("saved_search_id")
+  sentAt        DateTime @default(now()) @map("sent_at") @db.Timestamptz(6)
+  listingsCount Int      @map("listings_count")
+  details       Json?
+
+  savedSearch SavedSearch @relation(fields: [savedSearchId], references: [id], onDelete: Cascade)
+
+  @@index([savedSearchId, sentAt])
+  @@map("alert_events")
+}
