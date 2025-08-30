@@ -1,4 +1,5 @@
-﻿<!doctype html>
+﻿<!-- public/dashboard/index.html -->
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
@@ -18,14 +19,11 @@
     .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
     .pill{display:inline-block;padding:2px 8px;border:1px solid var(--br);border-radius:999px;font-size:12px;color:var(--g)}
     .muted{color:var(--g);font-size:12px}
-    pre{white-space:pre-wrap}
-    a{color:var(--p);text-decoration:none}
-    a:hover{text-decoration:underline}
   </style>
 </head>
 <body>
   <h1>AutoRadar — Dashboard</h1>
-  <p class="muted">This page is served by your API. Use the filters and hit <b>Search</b>. (<a href="/">Home</a>)</p>
+  <p class="muted">Served by your API. (<a href="/">Home</a>)</p>
 
   <div class="row">
     <div class="card" style="flex:1;min-width:320px">
@@ -51,11 +49,11 @@
         </div>
         <div style="min-width:120px">
           <label>Price min</label>
-          <input id="price_min" type="number" min="0" placeholder="e.g. 5000"/>
+          <input id="price_min" type="number" min="0" placeholder="5000"/>
         </div>
         <div style="min-width:120px">
           <label>Price max</label>
-          <input id="price_max" type="number" min="0" placeholder="e.g. 20000"/>
+          <input id="price_max" type="number" min="0" placeholder="20000"/>
         </div>
         <div style="min-width:120px">
           <label>Year min</label>
@@ -111,7 +109,9 @@ function qsFromFilters() {
   const v = (id)=>$(id).value.trim();
   if (v('marca')) q.set('marca', v('marca'));
   if (v('modelo')) q.set('modelo', v('modelo'));
-  ['price_min','price_max','year_min','year_max'].forEach(k=>{ if(v(k)) q.set(k, v(k)); });
+  ['price_min','price_max','year_min','year_max'].forEach((key)=>{
+    const val = v(key); if (val) q.set(key, val);
+  });
   if (v('fuel')) q.set('fuel', v('fuel'));
   if (v('trans')) q.set('trans', v('trans'));
   if (v('local')) q.set('local', v('local'));
@@ -123,8 +123,8 @@ function qsFromFilters() {
 async function loadBrands() {
   try {
     const data = await fetch('/brands').then(r=>r.json());
-    const sel = $('marca');
-    sel.innerHTML = '<option value="">Any</option>' + data.items.map(x=>`<option>${x.marca ?? ''}</option>`).join('');
+    $('marca').innerHTML = '<option value="">Any</option>' +
+      data.items.map(x=>`<option>${x.marca ?? ''}</option>`).join('');
   } catch(e) { console.warn(e); }
 }
 
@@ -135,7 +135,8 @@ async function loadModels() {
   if (!marca) return;
   try {
     const data = await fetch('/models?marca='+encodeURIComponent(marca)).then(r=>r.json());
-    sel.innerHTML = '<option value="">Any</option>' + data.items.map(x=>`<option>${x.modelo ?? ''}</option>`).join('');
+    sel.innerHTML = '<option value="">Any</option>' +
+      data.items.map(x=>`<option>${x.modelo ?? ''}</option>`).join('');
   } catch(e) { console.warn(e); }
 }
 
@@ -215,7 +216,10 @@ async function saveSearch(){
   $('email').addEventListener('change',()=>localStorage.setItem('ar_email',$('email').value.trim()));
   $('marca').addEventListener('change', loadModels);
   $('btnSearch').addEventListener('click', search);
-  $('btnReset').addEventListener('click', ()=>{ ['marca','modelo','price_min','price_max','year_min','year_max','fuel','trans','local'].forEach(id=>$(id).value=''); search();});
+  $('btnReset').addEventListener('click', ()=>{
+    ['marca','modelo','price_min','price_max','year_min','year_max','fuel','trans','local'].forEach((key)=>{ $(key).value=''; });
+    search();
+  });
   $('btnSave').addEventListener('click', saveSearch);
 
   loadBrands(); loadModels(); loadFacets(); search();
