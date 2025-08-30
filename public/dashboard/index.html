@@ -1,0 +1,225 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>AutoRadar — Dashboard</title>
+  <style>
+    :root { --b:#111827; --g:#6b7280; --br:#e5e7eb; --bg:#f9fafb; --p:#2563eb;}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;background:var(--bg)}
+    h1{margin:0 0 16px 0}
+    .row{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+    .card{background:#fff;border:1px solid var(--br);border-radius:12px;padding:16px;min-width:280px}
+    label{font-size:12px;color:var(--g)}
+    input,select{padding:8px;border:1px solid var(--br);border-radius:8px;width:100%}
+    button{padding:10px 14px;border:1px solid var(--p);background:var(--p);color:#fff;border-radius:10px;cursor:pointer}
+    button.ghost{background:#fff;color:var(--p)}
+    .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:end}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+    .pill{display:inline-block;padding:2px 8px;border:1px solid var(--br);border-radius:999px;font-size:12px;color:var(--g)}
+    .muted{color:var(--g);font-size:12px}
+    pre{white-space:pre-wrap}
+    a{color:var(--p);text-decoration:none}
+    a:hover{text-decoration:underline}
+  </style>
+</head>
+<body>
+  <h1>AutoRadar — Dashboard</h1>
+  <p class="muted">This page is served by your API. Use the filters and hit <b>Search</b>. (<a href="/">Home</a>)</p>
+
+  <div class="row">
+    <div class="card" style="flex:1;min-width:320px">
+      <div class="toolbar">
+        <div style="flex:1;min-width:140px">
+          <label>Email (for saving searches)</label>
+          <input id="email" placeholder="you@example.com"/>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button id="btnSave" class="ghost" title="Save current filters as a saved search">Save search</button>
+        </div>
+      </div>
+      <hr/>
+      <div class="row">
+        <div style="min-width:160px;flex:1">
+          <label>Brand</label>
+          <select id="marca"><option value="">Any</option></select>
+        </div>
+        <div style="min-width:160px;flex:1">
+          <label>Model</label>
+          <select id="modelo"><option value="">Any</option></select>
+        </div>
+        <div style="min-width:120px">
+          <label>Price min</label>
+          <input id="price_min" type="number" min="0" placeholder="e.g. 5000"/>
+        </div>
+        <div style="min-width:120px">
+          <label>Price max</label>
+          <input id="price_max" type="number" min="0" placeholder="e.g. 20000"/>
+        </div>
+        <div style="min-width:120px">
+          <label>Year min</label>
+          <input id="year_min" type="number" min="1980" max="2099" placeholder="2015"/>
+        </div>
+        <div style="min-width:120px">
+          <label>Year max</label>
+          <input id="year_max" type="number" min="1980" max="2099" placeholder="2023"/>
+        </div>
+        <div style="min-width:160px;flex:1">
+          <label>Fuel</label>
+          <select id="fuel"><option value="">Any</option></select>
+        </div>
+        <div style="min-width:160px;flex:1">
+          <label>Transmission</label>
+          <select id="trans"><option value="">Any</option></select>
+        </div>
+        <div style="min-width:160px;flex:1">
+          <label>Location</label>
+          <select id="local"><option value="">Any</option></select>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>&nbsp;</label>
+          <button id="btnSearch">Search</button>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button id="btnReset" class="ghost">Reset</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="min-width:280px;flex:1">
+      <h3 style="margin-top:0">KPIs</h3>
+      <div id="kpis"><span class="muted">Run a search…</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Results</h3>
+    <div id="meta" class="muted"></div>
+    <div id="results" class="grid"></div>
+  </div>
+
+<script>
+const $ = (id)=>document.getElementById(id);
+const state = { page_size: 24, page: 1 };
+
+function qsFromFilters() {
+  const q = new URLSearchParams();
+  const v = (id)=>$(id).value.trim();
+  if (v('marca')) q.set('marca', v('marca'));
+  if (v('modelo')) q.set('modelo', v('modelo'));
+  ['price_min','price_max','year_min','year_max'].forEach(k=>{ if(v(k)) q.set(k, v(k)); });
+  if (v('fuel')) q.set('fuel', v('fuel'));
+  if (v('trans')) q.set('trans', v('trans'));
+  if (v('local')) q.set('local', v('local'));
+  q.set('page_size', state.page_size);
+  q.set('page', state.page);
+  return q.toString();
+}
+
+async function loadBrands() {
+  try {
+    const data = await fetch('/brands').then(r=>r.json());
+    const sel = $('marca');
+    sel.innerHTML = '<option value="">Any</option>' + data.items.map(x=>`<option>${x.marca ?? ''}</option>`).join('');
+  } catch(e) { console.warn(e); }
+}
+
+async function loadModels() {
+  const marca = $('marca').value.trim();
+  const sel = $('modelo');
+  sel.innerHTML = '<option value="">Any</option>';
+  if (!marca) return;
+  try {
+    const data = await fetch('/models?marca='+encodeURIComponent(marca)).then(r=>r.json());
+    sel.innerHTML = '<option value="">Any</option>' + data.items.map(x=>`<option>${x.modelo ?? ''}</option>`).join('');
+  } catch(e) { console.warn(e); }
+}
+
+async function loadFacets() {
+  try {
+    const data = await fetch('/facets').then(r=>r.json());
+    $('fuel').innerHTML = '<option value="">Any</option>' + data.fuel.map(x=>`<option>${x.label}</option>`).join('');
+    $('trans').innerHTML = '<option value="">Any</option>' + data.trans.map(x=>`<option>${x.label}</option>`).join('');
+    $('local').innerHTML = '<option value="">Any</option>' + data.locals.map(x=>`<option>${x.label}</option>`).join('');
+  } catch(e) { console.warn(e); }
+}
+
+function fmt(n){ return n==null ? '—' : Intl.NumberFormat().format(n); }
+
+function renderKpis(k) {
+  $('kpis').innerHTML = `
+    <div class="row">
+      <div><span class="pill">Count: ${fmt(k.count)}</span></div>
+      <div><span class="pill">Avg €: ${fmt(Math.round(k.avg_price||0))}</span></div>
+      <div><span class="pill">Min €: ${fmt(k.min_price)}</span></div>
+      <div><span class="pill">Max €: ${fmt(k.max_price)}</span></div>
+      <div><span class="pill">Avg km: ${fmt(Math.round(k.avg_km||0))}</span></div>
+      <div><span class="pill">Avg year: ${fmt(Math.round(k.avg_year||0))}</span></div>
+    </div>`;
+}
+
+function renderResults(payload){
+  const { items, total, page, page_size } = payload;
+  $('meta').textContent = `Showing ${items.length} of ${total} (page ${page}, size ${page_size})`;
+  $('results').innerHTML = items.map(x => `
+    <div class="card">
+      <div><b>${x.marca ?? '—'} ${x.modelo ?? ''}</b></div>
+      <div class="muted">${x.ano ?? '—'} • ${x.km ? fmt(x.km)+' km' : '—'} • ${x.combustivel ?? '—'} • ${x.transmissao ?? '—'}</div>
+      <div style="margin:8px 0"><span class="pill">€ ${fmt(x.preco)}</span> <span class="pill">${x.local ?? '—'}</span></div>
+      <div><a target="_blank" href="${x.link}">Open ad ↗</a></div>
+    </div>`).join('');
+}
+
+async function search(){
+  const qs = qsFromFilters();
+  const [list, kpis] = await Promise.all([
+    fetch('/listings?'+qs).then(r=>r.json()),
+    fetch('/kpis?'+qs).then(r=>r.json()),
+  ]);
+  renderResults(list);
+  renderKpis(kpis);
+}
+
+async function saveSearch(){
+  const email = $('email').value.trim();
+  if(!email){ alert('Enter your email first'); return; }
+  const body = {
+    name: 'My dashboard search',
+    email,
+    notify: true,
+    cadenceMins: 1440,
+    query: '',
+    filters: qsFromFilters()
+  };
+  const r = await fetch('/saved-searches', {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json','x-user-email': email },
+    body: JSON.stringify(body)
+  });
+  if(!r.ok){
+    const t = await r.text();
+    alert('Failed to save: '+t);
+    return;
+  }
+  const j = await r.json();
+  alert('Saved! id: '+(j.id||'ok'));
+}
+
+(function init(){
+  const saved = localStorage.getItem('ar_email');
+  if(saved) $('email').value = saved;
+  $('email').addEventListener('change',()=>localStorage.setItem('ar_email',$('email').value.trim()));
+  $('marca').addEventListener('change', loadModels);
+  $('btnSearch').addEventListener('click', search);
+  $('btnReset').addEventListener('click', ()=>{ ['marca','modelo','price_min','price_max','year_min','year_max','fuel','trans','local'].forEach(id=>$(id).value=''); search();});
+  $('btnSave').addEventListener('click', saveSearch);
+
+  loadBrands(); loadModels(); loadFacets(); search();
+})();
+</script>
+</body>
+</html>
