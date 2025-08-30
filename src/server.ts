@@ -9,6 +9,7 @@ import { jobsRouter } from './routes/jobs';
 import authRoutes from "./routes/auth";
 import savedSearchesRouter from "./routes/savedSearches";
 import { alertsRouter } from "./routes/alerts";
+import "./env";
 
 const ENFORCE_EMAIL = process.env.ENFORCE_EMAIL_OWNERSHIP === "1";
 
