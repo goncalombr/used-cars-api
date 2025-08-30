@@ -1,15 +1,14 @@
-// used-cars/api/src/server.ts
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { PrismaClient, Prisma } from "@prisma/client";
-import { jobsRouter } from './routes/jobs';
+
 import authRoutes from "./routes/auth";
 import savedSearchesRouter from "./routes/savedSearches";
 import { alertsRouter } from "./routes/alerts";
-import "./env";
+import jobsRouter from "./routes/jobs"; // <-- NEW
 
 const ENFORCE_EMAIL = process.env.ENFORCE_EMAIL_OWNERSHIP === "1";
 
@@ -18,8 +17,9 @@ const prisma = new PrismaClient();
 
 /* ----------------------- Global JSON config ----------------------- */
 // Allow JSON to serialize BIGINT (from count(*)::bigint, etc.)
-app.set("json replacer", (_k: string, v: unknown) =>
-  typeof v === "bigint" ? v.toString() : v
+app.set(
+  "json replacer",
+  (_k: string, v: unknown) => (typeof v === "bigint" ? v.toString() : v)
 );
 
 /* ----------------------- Middleware ----------------------- */
@@ -99,7 +99,12 @@ if (ENFORCE_EMAIL) {
 /* ----------------------- Helpers ----------------------- */
 const num = (v?: string) => (v !== undefined && v !== "" ? Number(v) : null);
 const arr = (v?: string) =>
-  v && v.trim() ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  v && v.trim()
+    ? v
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
 
 function buildWhere(q: Record<string, string | undefined>) {
   const price_min = num(q.price_min);
@@ -151,9 +156,7 @@ function buildWhere(q: Record<string, string | undefined>) {
     );
   }
 
-  const whereSql = clauses.length
-    ? Prisma.join(clauses, " AND ")
-    : Prisma.sql`true`;
+  const whereSql = clauses.length ? Prisma.join(clauses, " AND ") : Prisma.sql`true`;
   return { whereSql };
 }
 
@@ -175,33 +178,24 @@ function buildSort(sort?: string) {
 /* ------------------------ Routes ------------------------ */
 
 // Health with DB probe
-app.get("/health", async (_req, res) => {
+app.get('/health', async (_req, res) => {
+  const now = new Date().toISOString();
   try {
-    await prisma.$queryRawUnsafe("SELECT 1");
-    res.json({
-      ok: true,
-      time: new Date().toISOString(),
-      db: "ok",
-    });
+    // Try a super-light DB probe, but don't crash even if it fails.
+    await prisma.$queryRawUnsafe('SELECT 1');
+    return res.json({ ok: true, time: now, db: 'ok' });
   } catch (e: any) {
-    res.status(500).json({
-      ok: false,
-      time: new Date().toISOString(),
-      db: "down",
-      error:
-        process.env.NODE_ENV === "production"
-          ? undefined
-          : e?.message ?? String(e),
-    });
+    // Still return ok:true so Render health checks don’t kill the process,
+    // but report db: 'down' so you can see it.
+    console.error('[health] probe failed:', e?.message ?? String(e));
+    return res.json({ ok: true, time: now, db: 'down' });
   }
 });
 
 // Brands list (Marca + count)
 app.get("/brands", async (_req, res) => {
   try {
-    const rows = await prisma.$queryRaw<
-      { marca: string | null; anuncios: bigint }[]
-    >`
+    const rows = await prisma.$queryRaw<{ marca: string | null; anuncios: bigint }[]>`
       select marca, count(*)::bigint as anuncios
       from public.listings
       group by marca
@@ -221,9 +215,7 @@ app.get("/models", async (req, res) => {
   try {
     const marca = ((req.query.marca as string | undefined) ?? "").trim();
     const like = "%" + marca + "%";
-    const rows = await prisma.$queryRaw<
-      { modelo: string | null; anuncios: bigint }[]
-    >`
+    const rows = await prisma.$queryRaw<{ modelo: string | null; anuncios: bigint }[]>`
       select modelo, count(*)::bigint as anuncios
       from public.listings
       where ${marca ? Prisma.sql`marca ilike ${like}` : Prisma.sql`true`}
@@ -439,7 +431,10 @@ app.get("/charts", async (req, res) => {
       const buckets = 10;
 
       const rows = await prisma.$queryRaw<{
-        i: number; lo: number; hi: number; count: number;
+        i: number;
+        lo: number;
+        hi: number;
+        count: number;
       }[]>`
         with bounds as (
           select ${lo}::float as lo, ${hi}::float as hi
@@ -476,7 +471,9 @@ app.get("/charts", async (req, res) => {
         from public.listings
         where ${whereSql}
       `;
-      price_hist = [{ lo: lo as number, hi: lo as number, count: Number(cnt[0]?.count ?? 0) }];
+      price_hist = [
+        { lo: lo as number, hi: lo as number, count: Number(cnt[0]?.count ?? 0) },
+      ];
     } else {
       price_hist = [];
     }
@@ -504,7 +501,6 @@ app.use(authRoutes);
 app.use("/saved-searches", savedSearchesRouter);
 app.use("/alerts", alertsRouter);
 app.use("/jobs", jobsRouter); // <-- NEW
-app.use('/jobs', jobsRouter);
 
 /* ------------------------ 404 & start ------------------------ */
 app.use((req, res) => {

@@ -1,19 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-// src/jobs/runAlerts.ts
-const client_1 = require("@prisma/client");
-const alertsRunner_1 = require("./alertsRunner");
-(async () => {
-    const prisma = new client_1.PrismaClient();
-    try {
-        const n = await (0, alertsRunner_1.runAlertsOnce)(prisma);
-        console.log(`[alerts] Processed ${n} search(es) due by cadence…`);
-    }
-    catch (e) {
-        console.error("[alerts] Failed:", e);
-        process.exitCode = 1;
-    }
-    finally {
-        await prisma.$disconnect();
-    }
-})();
+exports.runAlertsOnce = void 0;
+// Simple pass-through so other modules can import from './jobs/runAlerts'
+var alertsRunner_1 = require("./alertsRunner");
+Object.defineProperty(exports, "runAlertsOnce", { enumerable: true, get: function () { return alertsRunner_1.runAlertsOnce; } });
+const alertsRunner_2 = require("./alertsRunner");
+exports.default = alertsRunner_2.runAlertsOnce;

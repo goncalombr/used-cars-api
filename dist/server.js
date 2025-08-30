@@ -3,23 +3,22 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-// used-cars/api/src/server.ts
 require("dotenv/config");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const client_1 = require("@prisma/client");
-const jobs_1 = require("./routes/jobs");
 const auth_1 = __importDefault(require("./routes/auth"));
 const savedSearches_1 = __importDefault(require("./routes/savedSearches"));
 const alerts_1 = require("./routes/alerts");
+const jobs_1 = __importDefault(require("./routes/jobs")); // <-- NEW
 const ENFORCE_EMAIL = process.env.ENFORCE_EMAIL_OWNERSHIP === "1";
 const app = (0, express_1.default)();
 const prisma = new client_1.PrismaClient();
 /* ----------------------- Global JSON config ----------------------- */
 // Allow JSON to serialize BIGINT (from count(*)::bigint, etc.)
-app.set("json replacer", (_k, v) => typeof v === "bigint" ? v.toString() : v);
+app.set("json replacer", (_k, v) => (typeof v === "bigint" ? v.toString() : v));
 /* ----------------------- Middleware ----------------------- */
 // Security headers
 app.use((0, helmet_1.default)({
@@ -81,7 +80,12 @@ if (ENFORCE_EMAIL) {
 }
 /* ----------------------- Helpers ----------------------- */
 const num = (v) => (v !== undefined && v !== "" ? Number(v) : null);
-const arr = (v) => v && v.trim() ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];
+const arr = (v) => v && v.trim()
+    ? v
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
 function buildWhere(q) {
     const price_min = num(q.price_min);
     const price_max = num(q.price_max);
@@ -120,9 +124,7 @@ function buildWhere(q) {
     if (locals.length) {
         clauses.push(client_1.Prisma.sql `local IN (${client_1.Prisma.join(locals.map((l) => client_1.Prisma.sql `${l}`), ", ")})`);
     }
-    const whereSql = clauses.length
-        ? client_1.Prisma.join(clauses, " AND ")
-        : client_1.Prisma.sql `true`;
+    const whereSql = clauses.length ? client_1.Prisma.join(clauses, " AND ") : client_1.Prisma.sql `true`;
     return { whereSql };
 }
 function buildSort(sort) {
@@ -141,24 +143,18 @@ function buildSort(sort) {
 }
 /* ------------------------ Routes ------------------------ */
 // Health with DB probe
-app.get("/health", async (_req, res) => {
+app.get('/health', async (_req, res) => {
+    const now = new Date().toISOString();
     try {
-        await prisma.$queryRawUnsafe("SELECT 1");
-        res.json({
-            ok: true,
-            time: new Date().toISOString(),
-            db: "ok",
-        });
+        // Try a super-light DB probe, but don't crash even if it fails.
+        await prisma.$queryRawUnsafe('SELECT 1');
+        return res.json({ ok: true, time: now, db: 'ok' });
     }
     catch (e) {
-        res.status(500).json({
-            ok: false,
-            time: new Date().toISOString(),
-            db: "down",
-            error: process.env.NODE_ENV === "production"
-                ? undefined
-                : e?.message ?? String(e),
-        });
+        // Still return ok:true so Render health checks don’t kill the process,
+        // but report db: 'down' so you can see it.
+        console.error('[health] probe failed:', e?.message ?? String(e));
+        return res.json({ ok: true, time: now, db: 'down' });
     }
 });
 // Brands list (Marca + count)
@@ -394,7 +390,9 @@ app.get("/charts", async (req, res) => {
         from public.listings
         where ${whereSql}
       `;
-            price_hist = [{ lo: lo, hi: lo, count: Number(cnt[0]?.count ?? 0) }];
+            price_hist = [
+                { lo: lo, hi: lo, count: Number(cnt[0]?.count ?? 0) },
+            ];
         }
         else {
             price_hist = [];
@@ -421,8 +419,7 @@ app.get("/charts", async (req, res) => {
 app.use(auth_1.default);
 app.use("/saved-searches", savedSearches_1.default);
 app.use("/alerts", alerts_1.alertsRouter);
-app.use("/jobs", jobs_1.jobsRouter); // <-- NEW
-app.use('/jobs', jobs_1.jobsRouter);
+app.use("/jobs", jobs_1.default); // <-- NEW
 /* ------------------------ 404 & start ------------------------ */
 app.use((req, res) => {
     res.status(404).json({ error: "not_found", path: req.path });

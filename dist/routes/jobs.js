@@ -1,28 +1,59 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.jobsRouter = void 0;
-// src/routes/jobs.ts
 const express_1 = require("express");
-const alertsRunner_1 = require("../jobs/alertsRunner");
+const runAlerts_1 = require("../jobs/runAlerts");
 const jobsRouter = (0, express_1.Router)();
 exports.jobsRouter = jobsRouter;
 /**
- * POST /jobs/alerts/run
- * Header: x-cron-secret: <CRON_SECRET>
- * Kicks the alerts job once and returns how many searches were processed.
+ * Health ping for the jobs router
+ * GET /jobs/ping -> { ok: true }
  */
-jobsRouter.post("/jobs/alerts/run", async (req, res) => {
+jobsRouter.get("/ping", (_req, res) => {
+    res.json({ ok: true });
+});
+/**
+ * Trigger alerts once.
+ *
+ * You can call this in two ways:
+ * 1) POST /jobs/alerts/run  with header:  x-cron-secret: <SECRET>
+ * 2) GET  /jobs/alerts/run?s=<SECRET>
+ */
+jobsRouter.post("/alerts/run", async (req, res) => {
     try {
-        const provided = String(req.headers["x-cron-secret"] || "").trim();
-        const expected = String(process.env.CRON_SECRET || "").trim();
-        if (!expected || provided !== expected) {
+        const hdr = String(req.headers["x-cron-secret"] || "").trim();
+        const s = hdr || "";
+        const needed = String(process.env.CRON_SECRET || "").trim();
+        if (!needed) {
+            return res.status(500).json({ ok: false, error: "cron_secret_not_configured" });
+        }
+        if (!s || s !== needed) {
             return res.status(401).json({ ok: false, error: "unauthorized" });
         }
-        const processed = await (0, alertsRunner_1.runAlertsOnce)();
+        const processed = await (0, runAlerts_1.runAlertsOnce)();
         res.json({ ok: true, processed });
     }
     catch (e) {
-        console.error("[jobs] /jobs/alerts/run error:", e);
+        console.error("[jobs] alerts/run error:", e);
         res.status(500).json({ ok: false, error: e?.message ?? String(e) });
     }
 });
+jobsRouter.get("/alerts/run", async (req, res) => {
+    try {
+        const s = String(req.query.s || "").trim();
+        const needed = String(process.env.CRON_SECRET || "").trim();
+        if (!needed) {
+            return res.status(500).json({ ok: false, error: "cron_secret_not_configured" });
+        }
+        if (!s || s !== needed) {
+            return res.status(401).json({ ok: false, error: "unauthorized" });
+        }
+        const processed = await (0, runAlerts_1.runAlertsOnce)();
+        res.json({ ok: true, processed });
+    }
+    catch (e) {
+        console.error("[jobs] alerts/run(GET) error:", e);
+        res.status(500).json({ ok: false, error: e?.message ?? String(e) });
+    }
+});
+exports.default = jobsRouter;
