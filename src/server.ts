@@ -1,75 +1,82 @@
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import rateLimit from "express-rate-limit";
-import { PrismaClient, Prisma } from "@prisma/client";
+import 'dotenv/config';
+import express, { Request, Response, NextFunction } from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { PrismaClient, Prisma } from '@prisma/client';
 
-import authRoutes from "./routes/auth";
-import savedSearchesRouter from "./routes/savedSearches";
-import { alertsRouter } from "./routes/alerts";
-import jobsRouter from "./routes/jobs"; // <-- NEW
+import authRoutes from './routes/auth';
+import savedSearchesRouter from './routes/savedSearches';
+import { alertsRouter } from './routes/alerts';
+import { jobsRouter } from './routes/jobs';
+import debugRouter from './routes/debug';
 
-const ENFORCE_EMAIL = process.env.ENFORCE_EMAIL_OWNERSHIP === "1";
+/* ----------------------- Config ----------------------- */
+const ENFORCE_EMAIL = process.env.ENFORCE_EMAIL_OWNERSHIP === '1';
+const CRON_SECRET = process.env.CRON_SECRET ?? '';
+const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:3000';
 
 const app = express();
 const prisma = new PrismaClient();
 
-/* ----------------------- Global JSON config ----------------------- */
-// Allow JSON to serialize BIGINT (from count(*)::bigint, etc.)
-app.set(
-  "json replacer",
-  (_k: string, v: unknown) => (typeof v === "bigint" ? v.toString() : v)
+/* ----------------------- JSON BigInt ----------------------- */
+// Allow JSON to serialize BIGINTs (e.g., count(*)::bigint)
+app.set('json replacer', (_k: string, v: unknown) =>
+  typeof v === 'bigint' ? v.toString() : v
 );
 
-/* ----------------------- Middleware ----------------------- */
-// Security headers
+/* ----------------------- Security & CORS ----------------------- */
 app.use(
   helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
   })
 );
 
-// CORS for your web app
 app.use(
   cors({
-    origin: ["http://localhost:3000"],
+    origin: [WEB_ORIGIN],
     credentials: true,
   })
 );
 
-// Parse JSON
 app.use(express.json());
 
-// Rate limit (all routes) — 120 req/min/IP
+/* ----------------------- Rate Limiting ----------------------- */
+// Global limiter
 const limiter = rateLimit({
-  windowMs: 60_000,
-  limit: 120,
+  windowMs: 60_000, // 1 minute
+  limit: 120,       // 120 req/min/IP
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use(limiter);
 
-// Request ID (helps trace errors per request)
+// Bypass limiter for /jobs* when correct secret is provided
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const provided = String(req.headers['x-cron-secret'] ?? req.query?.s ?? '');
+  if (req.path.startsWith('/jobs') && provided === CRON_SECRET) {
+    return next();
+  }
+  return limiter(req, res, next);
+});
+
+/* ----------------------- Request ID & Dev Log ----------------------- */
 app.use((req, _res, next) => {
-  // Use existing x-request-id if provided (e.g., by proxies), else generate
-  // @ts-ignore: Node 18+ has crypto.randomUUID
+  // @ts-ignore Node 18+ has crypto.randomUUID
   const rid =
-    (req.headers["x-request-id"] as string) ??
+    (req.headers['x-request-id'] as string) ??
     (global as any).crypto?.randomUUID?.() ??
     Math.random().toString(36).slice(2);
   (req as any).requestId = rid;
   next();
 });
 
-// Simple structured request log (only in development)
-if (process.env.NODE_ENV !== "production") {
+if (process.env.NODE_ENV !== 'production') {
   app.use((req, _res, next) => {
     console.log(
       JSON.stringify({
         t: new Date().toISOString(),
-        lvl: "info",
-        msg: "req",
+        lvl: 'info',
+        msg: 'req',
         method: req.method,
         path: req.path,
         rid: (req as any).requestId,
@@ -79,32 +86,23 @@ if (process.env.NODE_ENV !== "production") {
   });
 }
 
-// Enforce that callers can only access their own email (?email=...) when enabled
-// Requires the frontend to send:  x-user-email: <their email>
+/* ----------------------- Email ownership guard ----------------------- */
 if (ENFORCE_EMAIL) {
-  app.use(["/saved-searches", "/alerts"], (req: any, res, next) => {
-    const hdr = String(req.headers["x-user-email"] || "").trim().toLowerCase();
-    const q = String((req.query as any).email || "").trim().toLowerCase();
-
-    // Only enforce on routes that use ?email=
-    if (!q) return next();
-
+  app.use(['/saved-searches', '/alerts'], (req: any, res, next) => {
+    const hdr = String(req.headers['x-user-email'] || '').trim().toLowerCase();
+    const q = String((req.query as any).email || '').trim().toLowerCase();
+    if (!q) return next(); // only enforce when ?email= is used
     if (!hdr || hdr !== q) {
-      return res.status(401).json({ error: "unauthorized_email" });
+      return res.status(401).json({ error: 'unauthorized_email' });
     }
     next();
   });
 }
 
 /* ----------------------- Helpers ----------------------- */
-const num = (v?: string) => (v !== undefined && v !== "" ? Number(v) : null);
+const num = (v?: string) => (v !== undefined && v !== '' ? Number(v) : null);
 const arr = (v?: string) =>
-  v && v.trim()
-    ? v
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : [];
+  v && v.trim() ? v.split(',').map((s) => s.trim()).filter(Boolean) : [];
 
 function buildWhere(q: Record<string, string | undefined>) {
   const price_min = num(q.price_min);
@@ -128,14 +126,14 @@ function buildWhere(q: Record<string, string | undefined>) {
   if (km_max !== null) clauses.push(Prisma.sql`km <= ${km_max}`);
   if (year_min !== null) clauses.push(Prisma.sql`ano >= ${year_min}`);
   if (year_max !== null) clauses.push(Prisma.sql`ano <= ${year_max}`);
-  if (marca) clauses.push(Prisma.sql`marca ilike ${"%" + marca + "%"}`);
-  if (modelo) clauses.push(Prisma.sql`modelo ilike ${"%" + modelo + "%"}`);
+  if (marca) clauses.push(Prisma.sql`marca ilike ${'%' + marca + '%'}`);
+  if (modelo) clauses.push(Prisma.sql`modelo ilike ${'%' + modelo + '%'}`);
 
   if (fuels.length) {
     clauses.push(
       Prisma.sql`combustivel IN (${Prisma.join(
         fuels.map((f) => Prisma.sql`${f}`),
-        ", "
+        ', '
       )})`
     );
   }
@@ -143,7 +141,7 @@ function buildWhere(q: Record<string, string | undefined>) {
     clauses.push(
       Prisma.sql`transmissao IN (${Prisma.join(
         trans.map((t) => Prisma.sql`${t}`),
-        ", "
+        ', '
       )})`
     );
   }
@@ -151,51 +149,58 @@ function buildWhere(q: Record<string, string | undefined>) {
     clauses.push(
       Prisma.sql`local IN (${Prisma.join(
         locals.map((l) => Prisma.sql`${l}`),
-        ", "
+        ', '
       )})`
     );
   }
 
-  const whereSql = clauses.length ? Prisma.join(clauses, " AND ") : Prisma.sql`true`;
+  const whereSql = clauses.length
+    ? Prisma.join(clauses, ' AND ')
+    : Prisma.sql`true`;
   return { whereSql };
 }
 
 function buildSort(sort?: string) {
   switch (sort) {
-    case "cheap":
+    case 'cheap':
       return Prisma.sql`preco asc`;
-    case "exp":
+    case 'exp':
       return Prisma.sql`preco desc`;
-    case "lowkm":
+    case 'lowkm':
       return Prisma.sql`km asc`;
-    case "newer":
+    case 'newer':
       return Prisma.sql`ano desc`;
     default:
-      return Prisma.sql`scraped_at desc`; // recent
+      return Prisma.sql`scraped_at desc`; // recent first
   }
 }
 
 /* ------------------------ Routes ------------------------ */
 
-// Health with DB probe
+// Health (keeps responding even if DB is down)
 app.get('/health', async (_req, res) => {
-  const now = new Date().toISOString();
   try {
-    // Try a super-light DB probe, but don't crash even if it fails.
-    await prisma.$queryRawUnsafe('SELECT 1');
-    return res.json({ ok: true, time: now, db: 'ok' });
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ ok: true, time: new Date().toISOString(), db: 'ok' });
   } catch (e: any) {
-    // Still return ok:true so Render health checks don’t kill the process,
-    // but report db: 'down' so you can see it.
-    console.error('[health] probe failed:', e?.message ?? String(e));
-    return res.json({ ok: true, time: now, db: 'down' });
+    res.status(500).json({
+      ok: false,
+      time: new Date().toISOString(),
+      db: 'down',
+      error:
+        process.env.NODE_ENV === 'production'
+          ? undefined
+          : e?.message ?? String(e),
+    });
   }
 });
 
-// Brands list (Marca + count)
-app.get("/brands", async (_req, res) => {
+// Brands
+app.get('/brands', async (_req, res) => {
   try {
-    const rows = await prisma.$queryRaw<{ marca: string | null; anuncios: bigint }[]>`
+    const rows = await prisma.$queryRaw<
+      { marca: string | null; anuncios: bigint }[]
+    >`
       select marca, count(*)::bigint as anuncios
       from public.listings
       group by marca
@@ -206,16 +211,18 @@ app.get("/brands", async (_req, res) => {
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: "failed_to_query" });
+    res.status(500).json({ error: 'failed_to_query' });
   }
 });
 
-// Models list for a given brand (Modelo + count)
-app.get("/models", async (req, res) => {
+// Models by brand
+app.get('/models', async (req, res) => {
   try {
-    const marca = ((req.query.marca as string | undefined) ?? "").trim();
-    const like = "%" + marca + "%";
-    const rows = await prisma.$queryRaw<{ modelo: string | null; anuncios: bigint }[]>`
+    const marca = ((req.query.marca as string | undefined) ?? '').trim();
+    const like = '%' + marca + '%';
+    const rows = await prisma.$queryRaw<
+      { modelo: string | null; anuncios: bigint }[]
+    >`
       select modelo, count(*)::bigint as anuncios
       from public.listings
       where ${marca ? Prisma.sql`marca ilike ${like}` : Prisma.sql`true`}
@@ -227,12 +234,12 @@ app.get("/models", async (req, res) => {
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: "failed_to_query" });
+    res.status(500).json({ error: 'failed_to_query' });
   }
 });
 
-// Listings with filters + sorting + pagination
-app.get("/listings", async (req, res) => {
+// Listings with filters + sort + pagination
+app.get('/listings', async (req, res) => {
   try {
     const q = req.query as Record<string, string | undefined>;
     const page = num(q.page) ?? 1;
@@ -275,12 +282,12 @@ app.get("/listings", async (req, res) => {
     res.json({ page, page_size, total, items });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: "failed_to_query" });
+    res.status(500).json({ error: 'failed_to_query' });
   }
 });
 
-// KPIs with same filters
-app.get("/kpis", async (req, res) => {
+// KPIs
+app.get('/kpis', async (req, res) => {
   try {
     const q = req.query as Record<string, string | undefined>;
     const { whereSql } = buildWhere(q);
@@ -318,12 +325,12 @@ app.get("/kpis", async (req, res) => {
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: "failed_to_query" });
+    res.status(500).json({ error: 'failed_to_query' });
   }
 });
 
-// Facets that ignore their own filter (so options don't vanish)
-app.get("/facets", async (req, res) => {
+// Facets (self-ignoring)
+app.get('/facets', async (req, res) => {
   try {
     const q = req.query as Record<string, string | undefined>;
 
@@ -357,18 +364,18 @@ app.get("/facets", async (req, res) => {
     `;
 
     res.json({
-      fuel: fuel.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
-      trans: trans.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
-      locals: locals.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
+      fuel: fuel.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
+      trans: trans.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
+      locals: locals.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: "failed_to_query" });
+    res.status(500).json({ error: 'failed_to_query' });
   }
 });
 
 // Charts (with safe price histogram — last bucket includes exact max)
-app.get("/charts", async (req, res) => {
+app.get('/charts', async (req, res) => {
   try {
     const q = req.query as Record<string, string | undefined>;
     const { whereSql } = buildWhere(q);
@@ -430,12 +437,7 @@ app.get("/charts", async (req, res) => {
     if (lo != null && hi != null && hi > lo) {
       const buckets = 10;
 
-      const rows = await prisma.$queryRaw<{
-        i: number;
-        lo: number;
-        hi: number;
-        count: number;
-      }[]>`
+      const rows = await prisma.$queryRaw<{ i: number; lo: number; hi: number; count: number }[]>`
         with bounds as (
           select ${lo}::float as lo, ${hi}::float as hi
         ),
@@ -471,43 +473,59 @@ app.get("/charts", async (req, res) => {
         from public.listings
         where ${whereSql}
       `;
-      price_hist = [
-        { lo: lo as number, hi: lo as number, count: Number(cnt[0]?.count ?? 0) },
-      ];
+      price_hist = [{ lo: lo as number, hi: lo as number, count: Number(cnt[0]?.count ?? 0) }];
     } else {
       price_hist = [];
     }
 
     res.json({
-      fuel_share: fuelRows.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
-      trans_share: transRows.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
+      fuel_share: fuelRows.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
+      trans_share: transRows.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
       year_dist: yearRows
         .filter((r) => r.year !== null)
         .map((r) => ({ year: r.year as number, count: Number(r.count) })),
       price_by_year: priceByYearRows
         .filter((r) => r.year !== null && r.avg_price !== null)
         .map((r) => ({ year: r.year as number, avg_price: r.avg_price as number })),
-      top_locals: topLocalRows.map((r) => ({ local: r.local ?? "—", count: Number(r.count) })),
+      top_locals: topLocalRows.map((r) => ({ local: r.local ?? '—', count: Number(r.count) })),
       price_hist,
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: "failed_to_query" });
+    res.status(500).json({ error: 'failed_to_query' });
   }
 });
 
 /* ------------------------ Routers ------------------------ */
 app.use(authRoutes);
-app.use("/saved-searches", savedSearchesRouter);
-app.use("/alerts", alertsRouter);
-app.use("/jobs", jobsRouter); // <-- NEW
+app.use('/saved-searches', savedSearchesRouter);
+app.use('/alerts', alertsRouter);
+app.use('/jobs', jobsRouter);
+app.use('/debug', debugRouter);
 
-/* ------------------------ 404 & start ------------------------ */
-app.use((req, res) => {
-  res.status(404).json({ error: "not_found", path: req.path });
+// Root welcome page
+app.get("/", (_req, res) => {
+  const base = "https://used-cars-api.onrender.com";
+  res.type("html").send(`
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>body{font-family:system-ui;margin:2rem;max-width:720px} a{color:#2563eb}</style>
+    <h1>AutoRadar API</h1>
+    <p>Welcome! The API is running.</p>
+    <ul>
+      <li><a href="${base}/health">/health</a></li>
+      <li><a href="${base}/listings?page_size=3">/listings?page_size=3</a></li>
+      <li><a href="${base}/jobs/ping">/jobs/ping</a></li>
+    </ul>
+  `);
 });
 
-const PORT = process.env.PORT || 8080;
+/* ------------------------ 404 ------------------------ */
+app.use((req, res) => {
+  res.status(404).json({ error: 'not_found', path: req.path });
+});
+
+/* ------------------------ Start ------------------------ */
+const PORT = Number(process.env.PORT ?? 8080);
 app.listen(PORT, () => {
   console.log(`API running on http://localhost:${PORT}`);
 });
