@@ -1,0 +1,21 @@
+﻿<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>AutoRadar</title>
+<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;line-height:1.4}.row{display:flex;gap:16px;flex-wrap:wrap}.card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;min-width:280px}code{background:#f3f4f6;padding:2px 6px;border-radius:6px}a{color:#2563eb;text-decoration:none}a:hover{text-decoration:underline}</style></head>
+<body>
+<h1>AutoRadar</h1><p>Backend is up. Quick links:</p><ul>
+<li><a target="_blank" href="/health">/health</a></li>
+<li><a target="_blank" href="/listings?page_size=3">/listings?page_size=3</a></li>
+<li><a target="_blank" href="/kpis">/kpis</a></li>
+</ul>
+<div class="row">
+  <div class="card"><h3>Latest 3 listings</h3><pre id="out">Loading…</pre></div>
+  <div class="card"><h3>KPIs</h3><pre id="kpi">Loading…</pre></div>
+</div>
+<script>
+(async function(){
+  try{const a=await fetch('/listings?page_size=3').then(r=>r.json());document.getElementById('out').textContent=JSON.stringify(a,null,2);}catch(e){document.getElementById('out').textContent=String(e);}
+  try{const k=await fetch('/kpis').then(r=>r.json());document.getElementById('kpi').textContent=JSON.stringify(k,null,2);}catch(e){document.getElementById('kpi').textContent=String(e);}
+})();
+</script>
+</body></html>

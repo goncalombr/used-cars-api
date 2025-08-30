@@ -1,82 +1,75 @@
-import 'dotenv/config';
-import express, { Request, Response, NextFunction } from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
-import { PrismaClient, Prisma } from '@prisma/client';
+// src/server.ts
+import "dotenv/config";
+import express, { Request, Response, NextFunction } from "express";
+import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import path from "path";
+import { PrismaClient, Prisma } from "@prisma/client";
 
-import authRoutes from './routes/auth';
-import savedSearchesRouter from './routes/savedSearches';
-import { alertsRouter } from './routes/alerts';
-import { jobsRouter } from './routes/jobs';
-import debugRouter from './routes/debug';
+// Routers (must exist)
+import authRoutes from "./routes/auth";
+import savedSearchesRouter from "./routes/savedSearches";
+import { alertsRouter } from "./routes/alerts";
+import { jobsRouter } from "./routes/jobs";
+import debugRouter from "./routes/debug";
 
-/* ----------------------- Config ----------------------- */
-const ENFORCE_EMAIL = process.env.ENFORCE_EMAIL_OWNERSHIP === '1';
-const CRON_SECRET = process.env.CRON_SECRET ?? '';
-const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:3000';
+const ENFORCE_EMAIL = process.env.ENFORCE_EMAIL_OWNERSHIP === "1";
+const WEB_ORIGIN =
+  (process.env.WEB_ORIGIN ?? "").trim() ||
+  "http://localhost:3000"; // allow your frontend during dev
 
 const app = express();
 const prisma = new PrismaClient();
 
-/* ----------------------- JSON BigInt ----------------------- */
-// Allow JSON to serialize BIGINTs (e.g., count(*)::bigint)
-app.set('json replacer', (_k: string, v: unknown) =>
-  typeof v === 'bigint' ? v.toString() : v
+/* ----------------------- JSON BigInt -> string ----------------------- */
+app.set("json replacer", (_k: string, v: unknown) =>
+  typeof v === "bigint" ? v.toString() : v
 );
 
-/* ----------------------- Security & CORS ----------------------- */
+/* ----------------------- Security / CORS / JSON ---------------------- */
 app.use(
   helmet({
-    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginResourcePolicy: { policy: "cross-origin" },
   })
 );
 
 app.use(
   cors({
-    origin: [WEB_ORIGIN],
+    origin: [WEB_ORIGIN, "https://used-cars-api.onrender.com"],
     credentials: true,
   })
 );
 
 app.use(express.json());
 
-/* ----------------------- Rate Limiting ----------------------- */
-// Global limiter
+/* ----------------------- Rate limit (all routes) --------------------- */
 const limiter = rateLimit({
-  windowMs: 60_000, // 1 minute
-  limit: 120,       // 120 req/min/IP
+  windowMs: 60_000,
+  limit: 120,
   standardHeaders: true,
   legacyHeaders: false,
 });
+app.use(limiter);
 
-// Bypass limiter for /jobs* when correct secret is provided
-app.use((req: Request, res: Response, next: NextFunction) => {
-  const provided = String(req.headers['x-cron-secret'] ?? req.query?.s ?? '');
-  if (req.path.startsWith('/jobs') && provided === CRON_SECRET) {
-    return next();
-  }
-  return limiter(req, res, next);
-});
-
-/* ----------------------- Request ID & Dev Log ----------------------- */
-app.use((req, _res, next) => {
-  // @ts-ignore Node 18+ has crypto.randomUUID
+/* ----------------------- Request ID & dev logging -------------------- */
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  // @ts-ignore Node 18+ crypto.randomUUID
   const rid =
-    (req.headers['x-request-id'] as string) ??
+    (req.headers["x-request-id"] as string) ??
     (global as any).crypto?.randomUUID?.() ??
     Math.random().toString(36).slice(2);
   (req as any).requestId = rid;
   next();
 });
 
-if (process.env.NODE_ENV !== 'production') {
-  app.use((req, _res, next) => {
+if (process.env.NODE_ENV !== "production") {
+  app.use((req: Request, _res: Response, next: NextFunction) => {
     console.log(
       JSON.stringify({
         t: new Date().toISOString(),
-        lvl: 'info',
-        msg: 'req',
+        lvl: "info",
+        msg: "req",
         method: req.method,
         path: req.path,
         rid: (req as any).requestId,
@@ -86,23 +79,29 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
-/* ----------------------- Email ownership guard ----------------------- */
+/* ----------------------- Enforce email ownership --------------------- */
+// Requires callers to send:  x-user-email: <their email>
+// Only enforced for /saved-searches and /alerts routes when they pass ?email=
 if (ENFORCE_EMAIL) {
-  app.use(['/saved-searches', '/alerts'], (req: any, res, next) => {
-    const hdr = String(req.headers['x-user-email'] || '').trim().toLowerCase();
-    const q = String((req.query as any).email || '').trim().toLowerCase();
+  app.use(["/saved-searches", "/alerts"], (req: Request, res: Response, next: NextFunction) => {
+    const hdr = String(req.headers["x-user-email"] || "").trim().toLowerCase();
+    const q = String((req.query as any).email || "").trim().toLowerCase();
     if (!q) return next(); // only enforce when ?email= is used
     if (!hdr || hdr !== q) {
-      return res.status(401).json({ error: 'unauthorized_email' });
+      return res.status(401).json({ error: "unauthorized_email" });
     }
     next();
   });
 }
 
-/* ----------------------- Helpers ----------------------- */
-const num = (v?: string) => (v !== undefined && v !== '' ? Number(v) : null);
+/* ----------------------- Serve tiny viewer (/public) ----------------- */
+// Put an index.html inside /public to navigate listings on your Render URL.
+app.use(express.static(path.join(process.cwd(), "public")));
+
+/* ----------------------------- Helpers ------------------------------ */
+const num = (v?: string) => (v !== undefined && v !== "" ? Number(v) : null);
 const arr = (v?: string) =>
-  v && v.trim() ? v.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  v && v.trim() ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
 function buildWhere(q: Record<string, string | undefined>) {
   const price_min = num(q.price_min);
@@ -126,14 +125,14 @@ function buildWhere(q: Record<string, string | undefined>) {
   if (km_max !== null) clauses.push(Prisma.sql`km <= ${km_max}`);
   if (year_min !== null) clauses.push(Prisma.sql`ano >= ${year_min}`);
   if (year_max !== null) clauses.push(Prisma.sql`ano <= ${year_max}`);
-  if (marca) clauses.push(Prisma.sql`marca ilike ${'%' + marca + '%'}`);
-  if (modelo) clauses.push(Prisma.sql`modelo ilike ${'%' + modelo + '%'}`);
+  if (marca) clauses.push(Prisma.sql`marca ilike ${"%" + marca + "%"}`);
+  if (modelo) clauses.push(Prisma.sql`modelo ilike ${"%" + modelo + "%"}`);
 
   if (fuels.length) {
     clauses.push(
       Prisma.sql`combustivel IN (${Prisma.join(
         fuels.map((f) => Prisma.sql`${f}`),
-        ', '
+        ", "
       )})`
     );
   }
@@ -141,7 +140,7 @@ function buildWhere(q: Record<string, string | undefined>) {
     clauses.push(
       Prisma.sql`transmissao IN (${Prisma.join(
         trans.map((t) => Prisma.sql`${t}`),
-        ', '
+        ", "
       )})`
     );
   }
@@ -149,58 +148,52 @@ function buildWhere(q: Record<string, string | undefined>) {
     clauses.push(
       Prisma.sql`local IN (${Prisma.join(
         locals.map((l) => Prisma.sql`${l}`),
-        ', '
+        ", "
       )})`
     );
   }
 
-  const whereSql = clauses.length
-    ? Prisma.join(clauses, ' AND ')
-    : Prisma.sql`true`;
+  const whereSql = clauses.length ? Prisma.join(clauses, " AND ") : Prisma.sql`true`;
   return { whereSql };
 }
 
 function buildSort(sort?: string) {
   switch (sort) {
-    case 'cheap':
+    case "cheap":
       return Prisma.sql`preco asc`;
-    case 'exp':
+    case "exp":
       return Prisma.sql`preco desc`;
-    case 'lowkm':
+    case "lowkm":
       return Prisma.sql`km asc`;
-    case 'newer':
+    case "newer":
       return Prisma.sql`ano desc`;
     default:
-      return Prisma.sql`scraped_at desc`; // recent first
+      return Prisma.sql`scraped_at desc`; // most recent first
   }
 }
 
-/* ------------------------ Routes ------------------------ */
+/* ------------------------------ Routes ------------------------------ */
 
-// Health (keeps responding even if DB is down)
-app.get('/health', async (_req, res) => {
+// Health (robust even if DB is down)
+app.get("/health", async (_req: Request, res: Response) => {
+  const now = new Date().toISOString();
   try {
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({ ok: true, time: new Date().toISOString(), db: 'ok' });
+    await prisma.$queryRawUnsafe("SELECT 1");
+    res.json({ ok: true, time: now, db: "ok" });
   } catch (e: any) {
     res.status(500).json({
       ok: false,
-      time: new Date().toISOString(),
-      db: 'down',
-      error:
-        process.env.NODE_ENV === 'production'
-          ? undefined
-          : e?.message ?? String(e),
+      time: now,
+      db: "down",
+      error: process.env.NODE_ENV === "production" ? undefined : e?.message ?? String(e),
     });
   }
 });
 
-// Brands
-app.get('/brands', async (_req, res) => {
+// Brands (Marca + count)
+app.get("/brands", async (_req: Request, res: Response) => {
   try {
-    const rows = await prisma.$queryRaw<
-      { marca: string | null; anuncios: bigint }[]
-    >`
+    const rows = await prisma.$queryRaw<{ marca: string | null; anuncios: bigint }[]>`
       select marca, count(*)::bigint as anuncios
       from public.listings
       group by marca
@@ -211,18 +204,16 @@ app.get('/brands', async (_req, res) => {
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'failed_to_query' });
+    res.status(500).json({ error: "failed_to_query" });
   }
 });
 
 // Models by brand
-app.get('/models', async (req, res) => {
+app.get("/models", async (req: Request, res: Response) => {
   try {
-    const marca = ((req.query.marca as string | undefined) ?? '').trim();
-    const like = '%' + marca + '%';
-    const rows = await prisma.$queryRaw<
-      { modelo: string | null; anuncios: bigint }[]
-    >`
+    const marca = ((req.query.marca as string | undefined) ?? "").trim();
+    const like = "%" + marca + "%";
+    const rows = await prisma.$queryRaw<{ modelo: string | null; anuncios: bigint }[]>`
       select modelo, count(*)::bigint as anuncios
       from public.listings
       where ${marca ? Prisma.sql`marca ilike ${like}` : Prisma.sql`true`}
@@ -234,12 +225,12 @@ app.get('/models', async (req, res) => {
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'failed_to_query' });
+    res.status(500).json({ error: "failed_to_query" });
   }
 });
 
-// Listings with filters + sort + pagination
-app.get('/listings', async (req, res) => {
+// Listings (filters + sorting + pagination)
+app.get("/listings", async (req: Request, res: Response) => {
   try {
     const q = req.query as Record<string, string | undefined>;
     const page = num(q.page) ?? 1;
@@ -282,12 +273,12 @@ app.get('/listings', async (req, res) => {
     res.json({ page, page_size, total, items });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'failed_to_query' });
+    res.status(500).json({ error: "failed_to_query" });
   }
 });
 
-// KPIs
-app.get('/kpis', async (req, res) => {
+// KPIs (filtered)
+app.get("/kpis", async (req: Request, res: Response) => {
   try {
     const q = req.query as Record<string, string | undefined>;
     const { whereSql } = buildWhere(q);
@@ -325,15 +316,14 @@ app.get('/kpis', async (req, res) => {
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'failed_to_query' });
+    res.status(500).json({ error: "failed_to_query" });
   }
 });
 
-// Facets (self-ignoring)
-app.get('/facets', async (req, res) => {
+// Facets (ignoring their own filter)
+app.get("/facets", async (req: Request, res: Response) => {
   try {
     const q = req.query as Record<string, string | undefined>;
-
     const { whereSql: wFuel } = buildWhere({ ...q, fuel: undefined });
     const { whereSql: wTrans } = buildWhere({ ...q, trans: undefined });
     const { whereSql: wLocal } = buildWhere({ ...q, local: undefined });
@@ -345,7 +335,6 @@ app.get('/facets', async (req, res) => {
       group by combustivel
       order by count desc
     `;
-
     const trans = await prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
       select transmissao as label, count(*)::bigint as count
       from public.listings
@@ -353,7 +342,6 @@ app.get('/facets', async (req, res) => {
       group by transmissao
       order by count desc
     `;
-
     const locals = await prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
       select local as label, count(*)::bigint as count
       from public.listings
@@ -364,18 +352,18 @@ app.get('/facets', async (req, res) => {
     `;
 
     res.json({
-      fuel: fuel.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
-      trans: trans.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
-      locals: locals.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
+      fuel: fuel.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
+      trans: trans.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
+      locals: locals.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'failed_to_query' });
+    res.status(500).json({ error: "failed_to_query" });
   }
 });
 
-// Charts (with safe price histogram — last bucket includes exact max)
-app.get('/charts', async (req, res) => {
+// Charts (safe price histogram; last bucket includes exact max)
+app.get("/charts", async (req: Request, res: Response) => {
   try {
     const q = req.query as Record<string, string | undefined>;
     const { whereSql } = buildWhere(q);
@@ -422,7 +410,7 @@ app.get('/charts', async (req, res) => {
       limit 10
     `;
 
-    // --- Price histogram (safe for min==max or no data; last bucket inclusive) ---
+    // --- Price histogram ---
     let price_hist: { lo: number; hi: number; count: number }[] = [];
 
     const mm = await prisma.$queryRaw<{ min: number | null; max: number | null }[]>`
@@ -437,7 +425,12 @@ app.get('/charts', async (req, res) => {
     if (lo != null && hi != null && hi > lo) {
       const buckets = 10;
 
-      const rows = await prisma.$queryRaw<{ i: number; lo: number; hi: number; count: number }[]>`
+      const rows = await prisma.$queryRaw<{
+        i: number;
+        lo: number;
+        hi: number;
+        count: number;
+      }[]>`
         with bounds as (
           select ${lo}::float as lo, ${hi}::float as hi
         ),
@@ -459,8 +452,8 @@ app.get('/charts', async (req, res) => {
             where ${whereSql}
               and preco is not null
               and (
-                (preco >= r.lo and preco < r.hi)           -- normal buckets: [lo, hi)
-                or (r.i = ${buckets - 1} and preco = r.hi) -- last bucket: include exact max
+                (preco >= r.lo and preco < r.hi)            -- normal buckets: [lo, hi)
+                or (r.i = ${buckets - 1} and preco = r.hi)  -- last bucket: include exact max
               )
           ) as count
         from ranges r
@@ -479,53 +472,37 @@ app.get('/charts', async (req, res) => {
     }
 
     res.json({
-      fuel_share: fuelRows.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
-      trans_share: transRows.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
+      fuel_share: fuelRows.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
+      trans_share: transRows.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
       year_dist: yearRows
         .filter((r) => r.year !== null)
         .map((r) => ({ year: r.year as number, count: Number(r.count) })),
       price_by_year: priceByYearRows
         .filter((r) => r.year !== null && r.avg_price !== null)
         .map((r) => ({ year: r.year as number, avg_price: r.avg_price as number })),
-      top_locals: topLocalRows.map((r) => ({ local: r.local ?? '—', count: Number(r.count) })),
+      top_locals: topLocalRows.map((r) => ({ local: r.local ?? "—", count: Number(r.count) })),
       price_hist,
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'failed_to_query' });
+    res.status(500).json({ error: "failed_to_query" });
   }
 });
 
-/* ------------------------ Routers ------------------------ */
+/* -------------------------- Attach Routers --------------------------- */
 app.use(authRoutes);
-app.use('/saved-searches', savedSearchesRouter);
-app.use('/alerts', alertsRouter);
-app.use('/jobs', jobsRouter);
-app.use('/debug', debugRouter);
+app.use("/saved-searches", savedSearchesRouter);
+app.use("/alerts", alertsRouter);
+app.use("/jobs", jobsRouter);
+app.use("/debug", debugRouter);
 
-// Root welcome page
-app.get("/", (_req, res) => {
-  const base = "https://used-cars-api.onrender.com";
-  res.type("html").send(`
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <style>body{font-family:system-ui;margin:2rem;max-width:720px} a{color:#2563eb}</style>
-    <h1>AutoRadar API</h1>
-    <p>Welcome! The API is running.</p>
-    <ul>
-      <li><a href="${base}/health">/health</a></li>
-      <li><a href="${base}/listings?page_size=3">/listings?page_size=3</a></li>
-      <li><a href="${base}/jobs/ping">/jobs/ping</a></li>
-    </ul>
-  `);
+/* ------------------------------ 404 --------------------------------- */
+app.use((req: Request, res: Response) => {
+  res.status(404).json({ error: "not_found", path: req.path });
 });
 
-/* ------------------------ 404 ------------------------ */
-app.use((req, res) => {
-  res.status(404).json({ error: 'not_found', path: req.path });
-});
-
-/* ------------------------ Start ------------------------ */
-const PORT = Number(process.env.PORT ?? 8080);
+/* ------------------------------ Start -------------------------------- */
+const PORT = Number(process.env.PORT) || 8080;
 app.listen(PORT, () => {
   console.log(`API running on http://localhost:${PORT}`);
 });

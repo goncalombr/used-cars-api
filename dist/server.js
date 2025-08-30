@@ -3,66 +3,59 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+// src/server.ts
 require("dotenv/config");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
+const path_1 = __importDefault(require("path"));
 const client_1 = require("@prisma/client");
+// Routers (must exist)
 const auth_1 = __importDefault(require("./routes/auth"));
 const savedSearches_1 = __importDefault(require("./routes/savedSearches"));
 const alerts_1 = require("./routes/alerts");
 const jobs_1 = require("./routes/jobs");
 const debug_1 = __importDefault(require("./routes/debug"));
-/* ----------------------- Config ----------------------- */
-const ENFORCE_EMAIL = process.env.ENFORCE_EMAIL_OWNERSHIP === '1';
-const CRON_SECRET = process.env.CRON_SECRET ?? '';
-const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:3000';
+const ENFORCE_EMAIL = process.env.ENFORCE_EMAIL_OWNERSHIP === "1";
+const WEB_ORIGIN = (process.env.WEB_ORIGIN ?? "").trim() ||
+    "http://localhost:3000"; // allow your frontend during dev
 const app = (0, express_1.default)();
 const prisma = new client_1.PrismaClient();
-/* ----------------------- JSON BigInt ----------------------- */
-// Allow JSON to serialize BIGINTs (e.g., count(*)::bigint)
-app.set('json replacer', (_k, v) => typeof v === 'bigint' ? v.toString() : v);
-/* ----------------------- Security & CORS ----------------------- */
+/* ----------------------- JSON BigInt -> string ----------------------- */
+app.set("json replacer", (_k, v) => typeof v === "bigint" ? v.toString() : v);
+/* ----------------------- Security / CORS / JSON ---------------------- */
 app.use((0, helmet_1.default)({
-    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginResourcePolicy: { policy: "cross-origin" },
 }));
 app.use((0, cors_1.default)({
-    origin: [WEB_ORIGIN],
+    origin: [WEB_ORIGIN, "https://used-cars-api.onrender.com"],
     credentials: true,
 }));
 app.use(express_1.default.json());
-/* ----------------------- Rate Limiting ----------------------- */
-// Global limiter
+/* ----------------------- Rate limit (all routes) --------------------- */
 const limiter = (0, express_rate_limit_1.default)({
-    windowMs: 60000, // 1 minute
-    limit: 120, // 120 req/min/IP
+    windowMs: 60000,
+    limit: 120,
     standardHeaders: true,
     legacyHeaders: false,
 });
-// Bypass limiter for /jobs* when correct secret is provided
-app.use((req, res, next) => {
-    const provided = String(req.headers['x-cron-secret'] ?? req.query?.s ?? '');
-    if (req.path.startsWith('/jobs') && provided === CRON_SECRET) {
-        return next();
-    }
-    return limiter(req, res, next);
-});
-/* ----------------------- Request ID & Dev Log ----------------------- */
+app.use(limiter);
+/* ----------------------- Request ID & dev logging -------------------- */
 app.use((req, _res, next) => {
-    // @ts-ignore Node 18+ has crypto.randomUUID
-    const rid = req.headers['x-request-id'] ??
+    // @ts-ignore Node 18+ crypto.randomUUID
+    const rid = req.headers["x-request-id"] ??
         global.crypto?.randomUUID?.() ??
         Math.random().toString(36).slice(2);
     req.requestId = rid;
     next();
 });
-if (process.env.NODE_ENV !== 'production') {
+if (process.env.NODE_ENV !== "production") {
     app.use((req, _res, next) => {
         console.log(JSON.stringify({
             t: new Date().toISOString(),
-            lvl: 'info',
-            msg: 'req',
+            lvl: "info",
+            msg: "req",
             method: req.method,
             path: req.path,
             rid: req.requestId,
@@ -70,22 +63,27 @@ if (process.env.NODE_ENV !== 'production') {
         next();
     });
 }
-/* ----------------------- Email ownership guard ----------------------- */
+/* ----------------------- Enforce email ownership --------------------- */
+// Requires callers to send:  x-user-email: <their email>
+// Only enforced for /saved-searches and /alerts routes when they pass ?email=
 if (ENFORCE_EMAIL) {
-    app.use(['/saved-searches', '/alerts'], (req, res, next) => {
-        const hdr = String(req.headers['x-user-email'] || '').trim().toLowerCase();
-        const q = String(req.query.email || '').trim().toLowerCase();
+    app.use(["/saved-searches", "/alerts"], (req, res, next) => {
+        const hdr = String(req.headers["x-user-email"] || "").trim().toLowerCase();
+        const q = String(req.query.email || "").trim().toLowerCase();
         if (!q)
             return next(); // only enforce when ?email= is used
         if (!hdr || hdr !== q) {
-            return res.status(401).json({ error: 'unauthorized_email' });
+            return res.status(401).json({ error: "unauthorized_email" });
         }
         next();
     });
 }
-/* ----------------------- Helpers ----------------------- */
-const num = (v) => (v !== undefined && v !== '' ? Number(v) : null);
-const arr = (v) => v && v.trim() ? v.split(',').map((s) => s.trim()).filter(Boolean) : [];
+/* ----------------------- Serve tiny viewer (/public) ----------------- */
+// Put an index.html inside /public to navigate listings on your Render URL.
+app.use(express_1.default.static(path_1.default.join(process.cwd(), "public")));
+/* ----------------------------- Helpers ------------------------------ */
+const num = (v) => (v !== undefined && v !== "" ? Number(v) : null);
+const arr = (v) => v && v.trim() ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];
 function buildWhere(q) {
     const price_min = num(q.price_min);
     const price_max = num(q.price_max);
@@ -112,57 +110,54 @@ function buildWhere(q) {
     if (year_max !== null)
         clauses.push(client_1.Prisma.sql `ano <= ${year_max}`);
     if (marca)
-        clauses.push(client_1.Prisma.sql `marca ilike ${'%' + marca + '%'}`);
+        clauses.push(client_1.Prisma.sql `marca ilike ${"%" + marca + "%"}`);
     if (modelo)
-        clauses.push(client_1.Prisma.sql `modelo ilike ${'%' + modelo + '%'}`);
+        clauses.push(client_1.Prisma.sql `modelo ilike ${"%" + modelo + "%"}`);
     if (fuels.length) {
-        clauses.push(client_1.Prisma.sql `combustivel IN (${client_1.Prisma.join(fuels.map((f) => client_1.Prisma.sql `${f}`), ', ')})`);
+        clauses.push(client_1.Prisma.sql `combustivel IN (${client_1.Prisma.join(fuels.map((f) => client_1.Prisma.sql `${f}`), ", ")})`);
     }
     if (trans.length) {
-        clauses.push(client_1.Prisma.sql `transmissao IN (${client_1.Prisma.join(trans.map((t) => client_1.Prisma.sql `${t}`), ', ')})`);
+        clauses.push(client_1.Prisma.sql `transmissao IN (${client_1.Prisma.join(trans.map((t) => client_1.Prisma.sql `${t}`), ", ")})`);
     }
     if (locals.length) {
-        clauses.push(client_1.Prisma.sql `local IN (${client_1.Prisma.join(locals.map((l) => client_1.Prisma.sql `${l}`), ', ')})`);
+        clauses.push(client_1.Prisma.sql `local IN (${client_1.Prisma.join(locals.map((l) => client_1.Prisma.sql `${l}`), ", ")})`);
     }
-    const whereSql = clauses.length
-        ? client_1.Prisma.join(clauses, ' AND ')
-        : client_1.Prisma.sql `true`;
+    const whereSql = clauses.length ? client_1.Prisma.join(clauses, " AND ") : client_1.Prisma.sql `true`;
     return { whereSql };
 }
 function buildSort(sort) {
     switch (sort) {
-        case 'cheap':
+        case "cheap":
             return client_1.Prisma.sql `preco asc`;
-        case 'exp':
+        case "exp":
             return client_1.Prisma.sql `preco desc`;
-        case 'lowkm':
+        case "lowkm":
             return client_1.Prisma.sql `km asc`;
-        case 'newer':
+        case "newer":
             return client_1.Prisma.sql `ano desc`;
         default:
-            return client_1.Prisma.sql `scraped_at desc`; // recent first
+            return client_1.Prisma.sql `scraped_at desc`; // most recent first
     }
 }
-/* ------------------------ Routes ------------------------ */
-// Health (keeps responding even if DB is down)
-app.get('/health', async (_req, res) => {
+/* ------------------------------ Routes ------------------------------ */
+// Health (robust even if DB is down)
+app.get("/health", async (_req, res) => {
+    const now = new Date().toISOString();
     try {
-        await prisma.$queryRaw `SELECT 1`;
-        res.json({ ok: true, time: new Date().toISOString(), db: 'ok' });
+        await prisma.$queryRawUnsafe("SELECT 1");
+        res.json({ ok: true, time: now, db: "ok" });
     }
     catch (e) {
         res.status(500).json({
             ok: false,
-            time: new Date().toISOString(),
-            db: 'down',
-            error: process.env.NODE_ENV === 'production'
-                ? undefined
-                : e?.message ?? String(e),
+            time: now,
+            db: "down",
+            error: process.env.NODE_ENV === "production" ? undefined : e?.message ?? String(e),
         });
     }
 });
-// Brands
-app.get('/brands', async (_req, res) => {
+// Brands (Marca + count)
+app.get("/brands", async (_req, res) => {
     try {
         const rows = await prisma.$queryRaw `
       select marca, count(*)::bigint as anuncios
@@ -176,14 +171,14 @@ app.get('/brands', async (_req, res) => {
     }
     catch (e) {
         console.error(e);
-        res.status(500).json({ error: 'failed_to_query' });
+        res.status(500).json({ error: "failed_to_query" });
     }
 });
 // Models by brand
-app.get('/models', async (req, res) => {
+app.get("/models", async (req, res) => {
     try {
-        const marca = (req.query.marca ?? '').trim();
-        const like = '%' + marca + '%';
+        const marca = (req.query.marca ?? "").trim();
+        const like = "%" + marca + "%";
         const rows = await prisma.$queryRaw `
       select modelo, count(*)::bigint as anuncios
       from public.listings
@@ -197,11 +192,11 @@ app.get('/models', async (req, res) => {
     }
     catch (e) {
         console.error(e);
-        res.status(500).json({ error: 'failed_to_query' });
+        res.status(500).json({ error: "failed_to_query" });
     }
 });
-// Listings with filters + sort + pagination
-app.get('/listings', async (req, res) => {
+// Listings (filters + sorting + pagination)
+app.get("/listings", async (req, res) => {
     try {
         const q = req.query;
         const page = num(q.page) ?? 1;
@@ -228,11 +223,11 @@ app.get('/listings', async (req, res) => {
     }
     catch (e) {
         console.error(e);
-        res.status(500).json({ error: 'failed_to_query' });
+        res.status(500).json({ error: "failed_to_query" });
     }
 });
-// KPIs
-app.get('/kpis', async (req, res) => {
+// KPIs (filtered)
+app.get("/kpis", async (req, res) => {
     try {
         const q = req.query;
         const { whereSql } = buildWhere(q);
@@ -261,11 +256,11 @@ app.get('/kpis', async (req, res) => {
     }
     catch (e) {
         console.error(e);
-        res.status(500).json({ error: 'failed_to_query' });
+        res.status(500).json({ error: "failed_to_query" });
     }
 });
-// Facets (self-ignoring)
-app.get('/facets', async (req, res) => {
+// Facets (ignoring their own filter)
+app.get("/facets", async (req, res) => {
     try {
         const q = req.query;
         const { whereSql: wFuel } = buildWhere({ ...q, fuel: undefined });
@@ -294,18 +289,18 @@ app.get('/facets', async (req, res) => {
       limit 50
     `;
         res.json({
-            fuel: fuel.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
-            trans: trans.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
-            locals: locals.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
+            fuel: fuel.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
+            trans: trans.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
+            locals: locals.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
         });
     }
     catch (e) {
         console.error(e);
-        res.status(500).json({ error: 'failed_to_query' });
+        res.status(500).json({ error: "failed_to_query" });
     }
 });
-// Charts (with safe price histogram — last bucket includes exact max)
-app.get('/charts', async (req, res) => {
+// Charts (safe price histogram; last bucket includes exact max)
+app.get("/charts", async (req, res) => {
     try {
         const q = req.query;
         const { whereSql } = buildWhere(q);
@@ -346,7 +341,7 @@ app.get('/charts', async (req, res) => {
       order by count desc
       limit 10
     `;
-        // --- Price histogram (safe for min==max or no data; last bucket inclusive) ---
+        // --- Price histogram ---
         let price_hist = [];
         const mm = await prisma.$queryRaw `
       select min(preco)::float as min, max(preco)::float as max
@@ -379,8 +374,8 @@ app.get('/charts', async (req, res) => {
             where ${whereSql}
               and preco is not null
               and (
-                (preco >= r.lo and preco < r.hi)           -- normal buckets: [lo, hi)
-                or (r.i = ${buckets - 1} and preco = r.hi) -- last bucket: include exact max
+                (preco >= r.lo and preco < r.hi)            -- normal buckets: [lo, hi)
+                or (r.i = ${buckets - 1} and preco = r.hi)  -- last bucket: include exact max
               )
           ) as count
         from ranges r
@@ -400,50 +395,35 @@ app.get('/charts', async (req, res) => {
             price_hist = [];
         }
         res.json({
-            fuel_share: fuelRows.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
-            trans_share: transRows.map((r) => ({ label: r.label ?? '—', count: Number(r.count) })),
+            fuel_share: fuelRows.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
+            trans_share: transRows.map((r) => ({ label: r.label ?? "—", count: Number(r.count) })),
             year_dist: yearRows
                 .filter((r) => r.year !== null)
                 .map((r) => ({ year: r.year, count: Number(r.count) })),
             price_by_year: priceByYearRows
                 .filter((r) => r.year !== null && r.avg_price !== null)
                 .map((r) => ({ year: r.year, avg_price: r.avg_price })),
-            top_locals: topLocalRows.map((r) => ({ local: r.local ?? '—', count: Number(r.count) })),
+            top_locals: topLocalRows.map((r) => ({ local: r.local ?? "—", count: Number(r.count) })),
             price_hist,
         });
     }
     catch (e) {
         console.error(e);
-        res.status(500).json({ error: 'failed_to_query' });
+        res.status(500).json({ error: "failed_to_query" });
     }
 });
-/* ------------------------ Routers ------------------------ */
+/* -------------------------- Attach Routers --------------------------- */
 app.use(auth_1.default);
-app.use('/saved-searches', savedSearches_1.default);
-app.use('/alerts', alerts_1.alertsRouter);
-app.use('/jobs', jobs_1.jobsRouter);
-app.use('/debug', debug_1.default);
-// Root welcome page
-app.get("/", (_req, res) => {
-    const base = "https://used-cars-api.onrender.com";
-    res.type("html").send(`
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <style>body{font-family:system-ui;margin:2rem;max-width:720px} a{color:#2563eb}</style>
-    <h1>AutoRadar API</h1>
-    <p>Welcome! The API is running.</p>
-    <ul>
-      <li><a href="${base}/health">/health</a></li>
-      <li><a href="${base}/listings?page_size=3">/listings?page_size=3</a></li>
-      <li><a href="${base}/jobs/ping">/jobs/ping</a></li>
-    </ul>
-  `);
-});
-/* ------------------------ 404 ------------------------ */
+app.use("/saved-searches", savedSearches_1.default);
+app.use("/alerts", alerts_1.alertsRouter);
+app.use("/jobs", jobs_1.jobsRouter);
+app.use("/debug", debug_1.default);
+/* ------------------------------ 404 --------------------------------- */
 app.use((req, res) => {
-    res.status(404).json({ error: 'not_found', path: req.path });
+    res.status(404).json({ error: "not_found", path: req.path });
 });
-/* ------------------------ Start ------------------------ */
-const PORT = Number(process.env.PORT ?? 8080);
+/* ------------------------------ Start -------------------------------- */
+const PORT = Number(process.env.PORT) || 8080;
 app.listen(PORT, () => {
     console.log(`API running on http://localhost:${PORT}`);
 });
